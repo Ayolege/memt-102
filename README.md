@@ -125,6 +125,50 @@ Rejected trades are logged with the rule that fired. Nothing is silent.
 
 ---
 
+## Backtesting
+
+The backtester replays historical OHLC bars through the **same** momentum
+logic the live bot uses (extracted into `src/strategies/momentumLogic.ts`),
+so signals can't drift between research and production.
+
+```bash
+# Single run with current .env params on the first watchlist mint:
+npm run backtest
+
+# Specific token + date range:
+npm run backtest -- --mint EKpQ... --from 2026-04-01 --to 2026-05-01 --interval 900
+
+# Parameter grid search (breakout threshold x trailing stop):
+npm run backtest -- --mint EKpQ... --sweep
+
+# Bring your own bars (CSV header: t,o,h,l,c,v with t in unix seconds):
+npm run backtest -- --mint EKpQ... --csv ./mybars.csv --verbose
+```
+
+Bars come from Birdeye (`BIRDEYE_API_KEY` in `.env`) and are cached on disk
+under `data/bars/`. Fills are simulated with `--slippage` (default 100 bps
+per side) and `--fee` (default 30 bps per trade). The engine is conservative:
+inside each bar it raises the high-water mark to the bar high *before*
+checking the trailing stop against the bar low, so trailing-stop exits are
+modelled at their worst-case fill.
+
+### Backtest is NOT paper-trading
+
+| | Backtest | Paper-trading | Live |
+|---|---|---|---|
+| Data | Historical bars | Live RPC | Live RPC |
+| Fills | Simulated (slippage assumption) | Simulated | Real |
+| Speed | Months in seconds | Real-time | Real-time |
+| Catches | Strategy logic, parameter fit | RPC quirks, signal frequency, latency | Everything (the hard way) |
+| Misses | Real liquidity, MEV, survivorship bias | Real fill price impact | Nothing |
+
+Workflow: backtest → tune params → run live with `DRY_RUN=true` (paper) for at
+least a few hours → flip `DRY_RUN=false` with the smallest size you can stomach.
+
+**Memecoins make backtesting especially unreliable**: the tokens with deep bar
+history are the survivors, not a fair sample. A strategy that backtests well
+on WIF/BONK/POPCAT may lose money on the next 50 launches.
+
 ## Risks (read this)
 
 - **Memecoins regularly go to zero.** The trailing stop is an exit hint, not a
@@ -164,6 +208,10 @@ src/
     copyTrading.ts
   scripts/
     balance.ts          # `npm run balance`
+  backtest/
+    cli.ts              # `npm run backtest`
+    engine.ts           # pure replay loop, slippage + fee model
+    dataSource.ts       # Birdeye OHLCV fetch (chunked) + CSV loader + disk cache
 rust/
   Cargo.toml
   src/main.rs           # `memt-sender` CLI: sign + race-send a tx

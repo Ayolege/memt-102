@@ -13,7 +13,8 @@
     "start": "node --enable-source-maps dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "balance": "tsx src/scripts/balance.ts"
+    "balance": "tsx src/scripts/balance.ts",
+    "backtest": "tsx src/backtest/cli.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.3",
