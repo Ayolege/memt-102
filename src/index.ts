@@ -1,10 +1,25 @@
 import { notify } from "./alerts.js";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
+import { formatSummary, summarise } from "./pnl.js";
 import * as positions from "./positions.js";
 import { startCopyTrading } from "./strategies/copyTrading.js";
 import { startMomentum } from "./strategies/momentum.js";
 import { getSolBalance, wallet } from "./wallet.js";
+
+const PNL_LOG_INTERVAL_MS = 5 * 60 * 1000;
+
+function startPnlLog() {
+  const tick = async () => {
+    try {
+      const s = await summarise({ mark: false });
+      logger.info("\n" + formatSummary(s));
+    } catch (err) {
+      logger.warn({ err }, "pnl summary failed");
+    }
+  };
+  setInterval(() => void tick(), PNL_LOG_INTERVAL_MS);
+}
 
 async function preflight() {
   await positions.load();
@@ -63,6 +78,7 @@ async function main() {
   await preflight();
   startMomentum();
   startCopyTrading();
+  startPnlLog();
 }
 
 main().catch((err) => {

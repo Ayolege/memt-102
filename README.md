@@ -125,6 +125,29 @@ Rejected trades are logged with the rule that fired. Nothing is silent.
 
 ---
 
+## Paper-trading PnL
+
+Every fill (live or dry-run) appends to `state/ledger.jsonl`. The PnL summariser
+matches buys and sells FIFO, marks open positions to market via Jupiter quotes,
+and gives you a flat-out "what would I have made" report:
+
+```bash
+npm run pnl              # full summary with mark-to-market on open positions
+npm run pnl -- --no-mark # skip the live quotes (faster, no internet needed)
+```
+
+The running bot also logs the same summary every 5 minutes so you can leave it
+in dry-run for a day and see how the strategies actually performed:
+
+```
+── PnL summary ────────────────────────────────────────────
+realised:   +12.40 USDC  (8 closed, 62.5% win)
+unrealised:  -3.10 USDC  (1 open)
+total PnL:   +9.30 USDC
+open positions:
+  EKpQGSJt…  cost=25.00  mark=21.90  pnl=-3.10 (-12.4%)
+```
+
 ## Backtesting
 
 The backtester replays historical OHLC bars through the **same** momentum
@@ -169,6 +192,26 @@ least a few hours → flip `DRY_RUN=false` with the smallest size you can stomac
 history are the survivors, not a fair sample. A strategy that backtests well
 on WIF/BONK/POPCAT may lose money on the next 50 launches.
 
+### Copy-trading replay
+
+For the copy strategy there are no OHLC bars to replay — the signals come from
+another wallet. The replay tool downloads that wallet's tx history, parses
+each base-mint swap (using the *same* `copyParser.ts` module the live bot
+uses), and simulates what your portfolio would have done mirroring it.
+
+```bash
+npm run replay-copy -- --wallet <address> --from 2026-04-29 --to 2026-05-13 --verbose
+```
+
+Fills are modelled at the target's effective price ± `--slippage`, with
+`--fee` deducted on entry+exit. This is optimistic: it assumes you would
+have landed in the same block as the target, and ignores the impact your
+own size would have had on the pool. Results are an upper bound, not a
+forecast.
+
+The fetched history is cached under `data/wallets/`; pass `--no-cache` to
+re-download.
+
 ## Risks (read this)
 
 - **Memecoins regularly go to zero.** The trailing stop is an exit hint, not a
@@ -206,12 +249,18 @@ src/
   strategies/
     momentum.ts
     copyTrading.ts
+  ledger.ts             # append-only JSONL log of every fill
+  pnl.ts                # FIFO matching + Jupiter mark-to-market
   scripts/
     balance.ts          # `npm run balance`
+    pnl.ts              # `npm run pnl`
   backtest/
-    cli.ts              # `npm run backtest`
+    cli.ts              # `npm run backtest` — momentum replay
     engine.ts           # pure replay loop, slippage + fee model
     dataSource.ts       # Birdeye OHLCV fetch (chunked) + CSV loader + disk cache
+    copyCli.ts          # `npm run replay-copy` — copy-trading replay
+    copyReplay.ts       # mirror-trade simulator
+    walletHistory.ts    # getSignaturesForAddress + parseSwap, cached
 rust/
   Cargo.toml
   src/main.rs           # `memt-sender` CLI: sign + race-send a tx

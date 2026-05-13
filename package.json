@@ -14,7 +14,9 @@
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "balance": "tsx src/scripts/balance.ts",
-    "backtest": "tsx src/backtest/cli.ts"
+    "pnl": "tsx src/scripts/pnl.ts",
+    "backtest": "tsx src/backtest/cli.ts",
+    "replay-copy": "tsx src/backtest/copyCli.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.3",

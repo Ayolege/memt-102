@@ -5,12 +5,7 @@ import { buy, sell } from "../executor.js";
 import { logger } from "../logger.js";
 import * as positions from "../positions.js";
 import { connection } from "../rpc.js";
-
-interface TokenDelta {
-  mint: string;
-  delta: bigint;
-  decimals: number;
-}
+import { parseSwap } from "./copyParser.js";
 
 const RECONNECT_DELAY_MS = 2_000;
 const seenSignatures = new Set<string>();
@@ -26,64 +21,24 @@ function rememberSignature(sig: string) {
   return true;
 }
 
-async function diffWalletBalances(
-  signature: string,
-  wallet: string,
-): Promise<TokenDelta[]> {
-  const tx = await connection.getParsedTransaction(signature, {
-    commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
-  });
-  if (!tx?.meta) return [];
-
-  const pre = tx.meta.preTokenBalances ?? [];
-  const post = tx.meta.postTokenBalances ?? [];
-
-  const byMint = new Map<string, { pre: bigint; post: bigint; decimals: number }>();
-  for (const b of pre) {
-    if (b.owner !== wallet) continue;
-    const e = byMint.get(b.mint) ?? { pre: 0n, post: 0n, decimals: b.uiTokenAmount.decimals };
-    e.pre = BigInt(b.uiTokenAmount.amount);
-    byMint.set(b.mint, e);
-  }
-  for (const b of post) {
-    if (b.owner !== wallet) continue;
-    const e = byMint.get(b.mint) ?? { pre: 0n, post: 0n, decimals: b.uiTokenAmount.decimals };
-    e.post = BigInt(b.uiTokenAmount.amount);
-    byMint.set(b.mint, e);
-  }
-
-  const deltas: TokenDelta[] = [];
-  for (const [mint, e] of byMint) {
-    const delta = e.post - e.pre;
-    if (delta !== 0n) deltas.push({ mint, delta, decimals: e.decimals });
-  }
-  return deltas;
-}
-
 async function handleSignature(target: string, signature: string) {
   if (!rememberSignature(signature)) return;
-  let deltas: TokenDelta[];
+
+  let tx;
   try {
-    deltas = await diffWalletBalances(signature, target);
+    tx = await connection.getParsedTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
   } catch (err) {
     logger.debug({ err, signature }, "copy: getParsedTransaction failed");
     return;
   }
-  if (deltas.length === 0) return;
 
-  // A swap looks like: target's base mint went down, target's other mint went up (or vice-versa).
-  const baseDelta = deltas.find((d) => d.mint === config.baseMint);
-  const otherDeltas = deltas.filter((d) => d.mint !== config.baseMint);
-  if (!baseDelta || otherDeltas.length === 0) return;
+  const evt = parseSwap(signature, tx, target, config.baseMint);
+  if (!evt) return;
 
-  if (baseDelta.delta < 0n) {
-    // Target spent base mint to acquire token(s) — mirror the largest acquisition.
-    const acquired = otherDeltas
-      .filter((d) => d.delta > 0n)
-      .sort((a, b) => (b.delta > a.delta ? 1 : -1))[0];
-    if (!acquired) return;
-
+  if (evt.kind === "buy") {
     const ourSpend = BigInt(
       Math.floor(
         config.risk.maxPositionUsd *
@@ -92,23 +47,14 @@ async function handleSignature(target: string, signature: string) {
       ),
     );
     if (ourSpend === 0n) return;
-
-    logger.info(
-      { target, mint: acquired.mint, signature },
-      "copy: mirroring buy",
-    );
-    await buy({ mint: acquired.mint, spendBaseUnits: ourSpend, source: "copy" });
+    logger.info({ target, mint: evt.mint, signature }, "copy: mirroring buy");
+    await buy({ mint: evt.mint, spendBaseUnits: ourSpend, source: "copy" });
     return;
   }
 
-  if (baseDelta.delta > 0n && config.copy.mirrorSells) {
-    // Target sold token(s) for base mint — close any of those positions we hold.
-    for (const d of otherDeltas) {
-      if (d.delta >= 0n) continue;
-      if (!positions.get(d.mint)) continue;
-      logger.info({ target, mint: d.mint, signature }, "copy: mirroring sell");
-      await sell({ mint: d.mint, reason: "copy: target exited" });
-    }
+  if (config.copy.mirrorSells && positions.get(evt.mint)) {
+    logger.info({ target, mint: evt.mint, signature }, "copy: mirroring sell");
+    await sell({ mint: evt.mint, reason: "copy: target exited" });
   }
 }
 

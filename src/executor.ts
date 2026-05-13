@@ -4,6 +4,7 @@ import bs58 from "bs58";
 import { notify } from "./alerts.js";
 import { config } from "./config.js";
 import { buildSwapTx, getQuote, type QuoteResponse } from "./jupiter.js";
+import * as ledger from "./ledger.js";
 import { logger } from "./logger.js";
 import * as positions from "./positions.js";
 import { capSize, evaluateEntry, evaluateExit } from "./risk.js";
@@ -109,6 +110,18 @@ export async function buy(opts: {
     source: opts.source,
   });
 
+  await ledger.append({
+    ts: Date.now(),
+    mint: opts.mint,
+    side: "buy",
+    source: opts.source,
+    signature,
+    baseUnits: sized.toString(),
+    tokenUnits: filled.toString(),
+    effectivePrice: price,
+    dryRun: config.dryRun,
+  });
+
   await notify(
     `BUY ${opts.mint.slice(0, 6)}… spent ${(Number(sized) / baseUnitsPerUsd).toFixed(2)} USDC ` +
       `@ ${price.toExponential(3)} (${opts.source}) sig=${signature.slice(0, 12)}…`,
@@ -168,8 +181,21 @@ export async function sell(opts: {
   const proceeds = BigInt(quote.outAmount);
   const cost = BigInt(pos.spentBaseUnits);
   const pnl = proceeds - cost;
+  const effectivePrice = Number(proceeds) / Number(sellAmount);
   await positions.recordRealisedPnl(pnl);
   await positions.remove(opts.mint);
+
+  await ledger.append({
+    ts: Date.now(),
+    mint: opts.mint,
+    side: "sell",
+    source: pos.source,
+    signature,
+    baseUnits: proceeds.toString(),
+    tokenUnits: sellAmount.toString(),
+    effectivePrice,
+    dryRun: config.dryRun,
+  });
 
   await notify(
     `SELL ${opts.mint.slice(0, 6)}… proceeds ${(Number(proceeds) / baseUnitsPerUsd).toFixed(2)} USDC ` +
